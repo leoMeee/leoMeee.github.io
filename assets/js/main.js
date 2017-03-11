@@ -11,6 +11,9 @@ $(function() {
 
   // run this function after pjax load.
   var afterPjax = function() {
+    $('pre code').each(function(i, block) {
+      hljs.highlightBlock(block);
+    });
     // open links in new tab.
     $('#main').find('a').filter(function() {
       return this.hostname != window.location.hostname;

@@ -1,0 +1,266 @@
+---
+layout: post
+title:  "Nginx 作为 web 服务器"
+date:   2017/3/11
+categories: Nginx
+tags: Nginx
+---   
+
+
+这篇文章解释怎样配置 Nginx 作为一个web服务器，包含以下章节：
+
+1. **配置虚拟服务器**
+2. **配置Locations**
+3. **使用变量**
+4. **返回指定状态码**
+5. **重写URL请求**
+6. **重写http响应**
+7. **处理错误请求**
+
+
+### 1. 配置虚拟服务器
+nginx 配置虚拟服务器必须至少包含一个 `server`指令块去定义虚拟服务器。当nginx处理一个请求时，它首先会选择一个虚拟服务器来处理。
+
+一个虚拟服务器通过一个 `server` 指令块定义，包含在`http`上下文中。
+
+	http {
+	    server {
+	        # Server configuration
+	    }
+	}
+	
+`http`上下文中可以定义多个`server`指令块。
+
+`server`指令块通常包含一个`listen`指令去定义服务器监听的请求IP地址和端口。IPv4和IPv6都可以接受。
+
+下面的例子展示了一个监听ip 127.0.0.1 和 端口 8080的服务器配置：
+
+	server {
+	    listen 127.0.0.1:8080;
+	    # The rest of server configuration
+	}
+
+如果没有定义端口号，将使用标准端口。同样的，如果ip地址没有定义，那这个服务器将监听所有地址的请求。如果没有定义 `listen`指令，那么标准端口是`80/tcp`，默认端口是`8000/tcp`, 这取决于超级管理员权限。
+
+如果有多个服务器匹配ip地址和端口。那么nginx会测试`server`指令块中的`server_name `指令是否与客户端请求头字段相匹配。
+`server_name`可以是精确的全名，一个通配符，或者一个正则表达式。通配符是以`*`开始或结尾的字符串，`*`匹配任何字符。
+nginx使用 Perl 语法解析正则表达式。正则表达式前面必须加上波浪符 `~`。
+
+	server {
+	    listen      80;
+	    server_name example.org www.example.org;
+	    ...
+	}
+
+如果有多个 服务器的 `server_name`匹配客户端请求头Host。Nginx从下面的列表中选择一个优先级最高的，优先级顺序是:
+
+1. 精确的server_name
+2. 以 `*` 开头的最长字符串，比如 `*.example.org`
+3. 以`*`结尾的最长字符串，比如`mail.*`
+4. 第一个匹配到正则表达式
+
+如果 `Host` 请求头不匹配任何 `server_name`，nginx会讲请求路由到默认服务器。默认服务器是nginx.conf文件中的第一个server配置。当然你可以在 `listen` 指令中使用`default_server`参数明确指定默认服务器。
+
+	server {
+	    listen      80 default_server;
+	    ...
+	}
+
+### 配置 Locations
+
+nginx能基于请求的uri将请求流发送到不同的代理服务器或不同的文件。这种配置需要使用`location`指令定义，`location`指令定义在`server`指令中。
+
+举个例子，你可以定义3个`location`指令块来指定虚拟服务器将其中一些请求发送到一个代理服务器，发送其他的请求到另一台代理服务器，发送剩余的请求到本地文件系统。
+
+nginx会将请求的URIs与所有`location`指令的参数作测试对比，然后找出一个匹配的location来使用。在每一个`location`内，通常可能会为一个特别的请求组放置更多的`location`指令来进一步缩小处理范围。
+
+#### location的匹配符
+
+`location` 指令有多种匹配符，并且各种匹配符存在匹配优先级：
+
+1.  **等于匹配符** `=`
+
+> 等于匹配符就是等号，特点是**精确匹配**，不支持正则表达式
+
+2. **空匹配符**
+
+>空匹配符也叫不带任何前缀的匹配符，它匹配以指定模式开始的URI，并且不支持正则表达式。
+
+3. **正则匹配符**`~`或`~*`
+
+> 正则匹配符是可以用正则表达式的匹配符。它包括区分大小写的 `~`符号，与不区分大小写的`~*`符号。
+
+4. **不要继续匹配正则** `^~`
+
+> ^ 表示“非”，~ 表示“正则”，字符意思是：不要继续匹配正则。作用是告诉Nginx ：匹配到了“普通location ”后，不再需要继续匹配“正则location ”了
+
+5. **内部访问符** `@`
+
+> 一般用于错误页面等。
+
+#### 匹配符优先级
+
+location的几种匹配符可以分为两大类：**正则匹配符**和**普通匹配符**
+
+正则匹配符：`~`, `~*`
+普通匹配符：`=`,`^~`,`@`,空匹配符
+
+正则匹配符与普通匹配符的匹配规则，总结一句话就是：
+> “正则 location 匹配让步普通 location 的严格精确匹配结果；但覆盖普通 location 的最大前缀匹配结果”
+
+匹配符之间的详细优先级是：
+
+1. =
+2. 空匹配符，满足精确匹配时
+3. ^~
+4. ~或~*
+5. 空匹配符，满足以指定模式开始时的匹配时
+
+举个例子：`=` 与 **精确匹配时的空匹配符**
+
+	location /poechant {
+	    hello_world no1;
+	}
+	location = /poechant {
+	    hello_world no2;
+	}
+
+>如果我们的请求是http://my.domian/poechant，则我们发现两个location都与请求的 URI 匹配，这时根据我们的优先级顺序，第一个是精确匹配时的空匹配符，第二个是等于匹配符，所以第二个的优先级高，也就是应该输出：`hello_world, no2`
+
+关于location匹配优先级的参考：https://www.douban.com/note/334803207/?type=like
+
+#### 匹配到请求之后
+location块内部可以包含怎样处理请求的指令，可以发送一个静态文件或者把请求转发到代理服务器。
+在下面的例子中，如果一个请求被第一个location匹配到，那么将发送`/data`目录中的文件。如果被第二个location匹配到，那么请求将被转发到`www.example.com`域名的代理服务器。
+
+	server {
+	    location /images/ {
+	        root /data;
+	    }
+	
+	    location / {
+	        proxy_pass http://www.example.com;
+	    }
+	}	
+	
+`root`指令指定了服务于请求的静态文件系统目录，请求中的URI将被添加到这个目录后面以获得完整的静态文件路径名。在上面的例子中，如果请求uri是`images/example.png`,那么nginx将会寻找本地的`/data/images/example.png`文件。
+
+
+### Nginx中使用变量
+你可以在nginx中使用变量，来使nginx动态的处理不同的请求。变量就是nginx在运行时计算并用作参数的指令值。一个变量名必须以`$`开始。
+
+nginx有很多预定义的变量， 比如 ` core HTTP`核心模块的变量。当然你也可以使用`set`,`map`或`geo`指令自定义变量。大多数变量是在运行时计算，并包含有关该特定请求的信息。比如，` $remote_addr `包含请求的客户端ip地址，`$uri`保存当前请求的URI值。
+
+
+### 返回指定状态码
+有些网站url需要立即响应一个特别的状态码或跳转链接。比如有一个页面暂时或永久的移动了。你可以使用`return`指令轻松返回一个状态码：
+
+	location /wrong/url {
+	    return 404;
+	}
+
+`return`指令的第一个参数是一个`响应状态码`。第二个参数(可选)是一个跳转链接地址(for codes 301, 302, 303, and 307)或者是响应体文本(response body text)。
+举个例子：
+
+	location /permanently/moved/url {
+	    return 301 http://www.example.com/moved/here;
+	}
+
+`return`指令可以放在`location`指令块中，也可以放在`server`指令块中。
+
+### 重写URL请求
+请求url可以在请求的处理过程中通过使用`rewrite`指令修改。这个指令有两个必填的参数和一个可选的参数。
+第一个参数是一个匹配请求URI的正则表达式。第二个参数是将匹配的URL重写后的URL。第三个可选的参数可以是一个阻止nginx继续匹配重写规则的flag，或者发送一个跳转码。
+
+	location /users/ {
+	    rewrite ^/users/(.*)$ /show?user=$1 break;
+	}
+
+正如上面的例子所展现的，第二个参数的user `$1`通过第一个参数的正则中获取。
+
+你可以在`location`或`server`中添加很多`rewrite`指令。Nginx会按顺序一个接一个的执行。The rewrite directives in a server context are executed once when that context is selected.
+
+当Nginx处理了一组`rewrite`指令后，它会选择一个匹配的`location`处理新的URI，如果这个被选中的`location`也包含了`rewrite`指令，那么会依次执行。如果URI匹配多个规则，那么处理完一个rewrite指令后，会继续处理下一个。
+
+下面的例子展示一组包含`return`指令的`rewrite`规则。
+
+	server {
+	    ...
+	    rewrite ^(/download/.*)/media/(.*)\..*$ $1/mp3/$2.mp3 last;
+	    rewrite ^(/download/.*)/audio/(.*)\..*$ $1/mp3/$2.ra  last;
+	    return  403;
+	    ...
+	}
+
+这个例子的配置会解析两种规则的URIs。比如`/download/some/media/file `这样的uri会被重写成` /download/some/mp3/file.mp3`。因为这个规则最后包含了`last`flag，所以后面的指令(第二个rewrite指令和return指令)会被跳过。
+但是nginx会继续处理接下来的请求。同样地，例如这样的uri `/download/some/audio/file`会被重写成` /download/some/mp3/file.ra`。如果一个url不匹配任何重写规则，nginx会返回一个403错误码给客户端。
+
+有两个会中断`rewrite`指令的参数：
+
+1. `last`
+
+> 这个参数的意思是停止在当前`server`或`location`上下文中继续执行`rewrite`指令。但是nginx会为重写后的uri寻找一个匹配的`location`,如果这个`location`中依然存在`rewrite`指令，那么这个指令会被执行。**意思是uri可以被再次重写**。
+
+2. `break`
+
+>停止在当前的上下文中继续执行`rewrite`指令，并且不会为重写后的uri寻找匹配的`location`。**URI不会被再次重写**。
+
+###  重写HTTP响应内容
+
+有时候你需要修改或替换网站响应内容，比如把一个字符串换成另一个。你可以使用`sub_filter `指令来定义替换规则。这个指令支持变量和链式替换，可以应用在复杂的替换规则上。
+
+举个例子，你可以替换响应中的链接地址。
+
+	location / {
+	    sub_filter      /blog/ /blog-staging/;
+	    sub_filter_once off;
+	}
+
+`sub_filter_once off`表示多次替换。
+
+另一个例子是替换`http://`为`https://`，并且替换localhost地址为请求头字段中的 ` host name`. `sub_filter_once on`指令告诉nginx只执行一次替换。
+
+	location / {
+	    sub_filter     'href="http://127.0.0.1:8080/'    'href="https://$host/';
+	    sub_filter     'img src="http://127.0.0.1:8080/' 'img src="https://$host/';
+	    sub_filter_once on;
+	}
+
+### 处理错误请求
+使用`error_page`指令，你可以配置nginx根据不同的错误码返回自定义的错误页面, 或者跳转到一个指定的URl。在下面的例子中，`error_page`指令为404错误码指定了一个错误页面
+
+	error_page 404 /404.html;
+
+注意，这个指令的意思并不是立即响应(`return`指令是这么做的)，它只是简单的指定了当错误发生时应该怎么办。错误码可以来自代理服务器，也可以发生在nginx处理请求时（比如当nginx找不到请求的文件时）。
+
+在下面的例子中，当nginx找不到页面时，它将把响应码 404 替换成 301，并且告诉客户端跳转到`http:/example.com/new/path.html`。 这个配置在客户端依然访问网站旧链接时特别有用，301状态码告诉浏览器请求的页面已经永久转移了，需要根据响应跳转到新页面。
+
+	location /old/path.html {
+	    error_page 404 =301 http:/example.com/new/path.html;
+	}
+
+下面的配置例子将一个请求转发到后端,如果请求的文件没有找到。因为在`error_page`指令中，等号后面没有指定状态码，所以响应给客户端的状态码来自代理服务器（不一定是404）。
+
+	server {
+	    ...
+	    location /images/ {
+	        # Set the root directory to search for the file
+	        root /data/www;
+	
+	        # Disable logging of errors related to file existence
+	        open_file_cache_errors off;
+	
+	        # Make an internal redirect if the file is not found
+	        error_page 404 = /fetch$uri;
+	    }
+	
+	    location /fetch/ {
+	        proxy_pass http://backend/;
+	    }
+	}
+
+当文件没有找到时，`error_page`指令命令nginx做一次内部跳转。`error_page`中最后的`$uri`变量保存了当前请求的uri，将在跳转时传递过去。
+
+举个例子，如果`/images/some/file`没有找到，这个uri将被替换成`/fetch/images/some/file`，然后开始寻找新的location匹配。结果是，这个请求被第二个`location`匹配到，并且转发到`http://backend/`。
+
+当文件没有找到时，这里的`open_file_cache_errors off`指令会阻止在缓存中写入错误信息。因为在这个配置中错误请求会被正确的跳转，所以记录错误信息没有必要。
